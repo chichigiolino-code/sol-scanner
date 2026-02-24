@@ -15,8 +15,9 @@ from datetime import datetime
 # ─────────────────────────────────────────────────────────────
 # KONFIGURATION – hier deine Daten eintragen!
 # ─────────────────────────────────────────────────────────────
-TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN",   "DEIN_BOT_TOKEN_HIER")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "DEINE_CHAT_ID_HIER")
+TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN",   8678164580:AAEmznr79S6qO-NDqHkx8gOM-IqpyA884MQ
+
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", 2050191721
 
 SYMBOL                 = "SOLUSDT"
 SCALP_CHECK_SECONDS    = 60    # Scalp: jede Minute prüfen
