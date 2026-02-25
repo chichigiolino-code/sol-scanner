@@ -17,7 +17,7 @@ from datetime import datetime
 # ─────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN",   "8678164580:AAEmznr79S6qO-NDqHkx8gOM-IqpyA884MQ"
 
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", 2050191721
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "2050191721"
 
 SYMBOL                 = "SOLUSDT"
 SCALP_CHECK_SECONDS    = 60    # Scalp: jede Minute prüfen
