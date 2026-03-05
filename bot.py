@@ -156,7 +156,7 @@ def get_session():
     hour = datetime.now().hour
     if 14 <= hour < 17:
         return "OVERLAP",   "London/NY Overlap 🔥", 1.30
-    elif 9 <= hour < 18:
+    elif 8 <= hour < 18:
         return "LONDON_NY", "London/NY Session",    1.20
     else:
         return "OTHER",     "Ausserhalb Sessions",   0.80
