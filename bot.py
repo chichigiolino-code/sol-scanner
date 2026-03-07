@@ -842,7 +842,7 @@ def main():
 
                 # Warning Check
                 warning = check_prebreakout_warning(direction, session_name)
-                if warning and (last_warning is None or (now - last_warning is None) > 1800:
+                if warning and (last_warning is None or (now - last_warning) > 1800:
                     sent = send_telegram(format_warning(warning))
                     if sent:
                         last_warning = now
