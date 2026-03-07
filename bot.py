@@ -696,6 +696,28 @@ def analyze():
 
     direction = "LONG" if trend_1h == "BULLISH" else "SHORT"
 
+    # MOMENTUM FILTER: Kein Einstieg bei schwachem Momentum / choppy Markt
+    df_1h_mom = get_candles(SYMBOL, "1H", 20)
+    if df_1h_mom is not None and len(df_1h_mom) >= 15:
+        last = df_1h_mom.iloc[-1]
+        atr_mom = calc_atr(df_1h_mom).iloc[-1]
+        rsi_mom = calc_rsi(df_1h_mom["close"]).iloc[-1]
+        atr_pct = atr_mom / last["close"] * 100
+        body = abs(last["close"] - last["open"])
+        candle_range = last["high"] - last["low"]
+        body_ratio = body / candle_range if candle_range > 0 else 0
+        # ATR zu klein → choppy/ranging Markt
+        if atr_pct < 0.8:
+            return None
+        # RSI kein Momentum
+        if direction == "SHORT" and rsi_mom > 45:
+            return None
+        if direction == "LONG" and rsi_mom < 55:
+            return None
+        # Kerze hat keinen echten Body → Unentschlossenheit
+        if body_ratio < 0.4:
+            return None
+
     # LAYER 3: 15m Setup (zuerst - schnellster Filter)
     market_mode, factor_15m, atr, sig_15m = analyze_15m(direction)
     if market_mode is None:
