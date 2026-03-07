@@ -937,4 +937,12 @@ def main():
         time.sleep(10)
 
 if __name__ == "__main__":
-    main()
+    while True:
+        try:
+            main()
+        except Exception as e:
+            import traceback
+            print("[CRASH] " + str(e))
+            traceback.print_exc()
+            print("[CRASH] Neustart in 30 Sekunden...")
+            time.sleep(30)
