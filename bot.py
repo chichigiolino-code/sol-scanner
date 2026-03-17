@@ -119,6 +119,51 @@ def get_price():
     except:
         return 0.0
 
+# ─── AI ANALYSE (Claude API) ────────────────────────────────
+
+def get_ai_analysis(signal_data):
+    """Ruft Claude API auf für kurze Signal-Analyse vor dem Telegram-Alert"""
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return None
+
+    sm = signal_data["sm_data"]
+    prompt = (
+        f"Du bist ein erfahrener Crypto-Trader. Analysiere dieses SOL/USDT Signal in max 3 Zeilen auf Deutsch.\n\n"
+        f"Signal: {signal_data['direction']}\n"
+        f"Score: {signal_data['score']}% ({signal_data['grade']})\n"
+        f"ATR Expansion: {sm['atr_expand']}x\n"
+        f"Volumen Ratio: {sm['vol_ratio']}x\n"
+        f"Akkumulation Range: {sm['w_range_pct']}%\n"
+        f"4h + 1h Trend: {signal_data['trend_4h']}\n"
+        f"Session: {signal_data['session']}\n"
+        f"Funding Rate: {signal_data['funding']}%\n\n"
+        f"Bewerte kurz: Ist das Marktregime trending oder choppy? Ist dem Signal zu vertrauen?\n"
+        f"Antwort: max 3 Zeilen, direkt, kein Intro."
+    )
+
+    try:
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 150,
+                "messages": [{"role": "user", "content": prompt}]
+            },
+            timeout=10
+        )
+        if r.status_code == 200:
+            return r.json()["content"][0]["text"].strip()
+        print(f"[AI] Status {r.status_code}")
+    except Exception as e:
+        print(f"[AI] Fehler: {e}")
+    return None
+
 # ─── INDIKATOREN ───────────────────────────────────────────
 
 def calc_ema(series, period):
@@ -502,6 +547,18 @@ def format_alert(data):
         data["sig_4h"],
         data["sig_1h"],
         "🔵 Funding: " + str(round(data["funding"], 3)) + "%",
+    ]
+
+    # AI Analyse
+    ai_text = get_ai_analysis(data)
+    if ai_text:
+        lines.append("——————————————————")
+        lines.append("🤖 <b>AI Analyse:</b>")
+        for line in ai_text.split("\n"):
+            if line.strip():
+                lines.append(line.strip())
+
+    lines += [
         "——————————————————",
         "⚠️ <i>Kein Auto-Trade – du entscheidest!</i>"
     ]
@@ -679,3 +736,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
