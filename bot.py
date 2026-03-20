@@ -7,7 +7,6 @@ from datetime import datetime
 
 COOLDOWN_FILE = "/tmp/bot_last_alert.json"
 TRADES_FILE   = "/tmp/bot_active_trades.json"
-WARNING_FILE  = "/tmp/bot_last_warning.json"
 
 def save_last_alert(ts):
     try:
@@ -33,28 +32,14 @@ def load_active_trades():
     except: pass
     return []
 
-def save_last_warning(ts):
-    try:
-        with open(WARNING_FILE, "w") as f: json.dump({"last_warning": ts}, f)
-    except: pass
-
-def load_last_warning():
-    try:
-        if os.path.exists(WARNING_FILE):
-            with open(WARNING_FILE) as f: return json.load(f).get("last_warning", 0)
-    except: pass
-    return 0
-
 # CONFIG
 TELEGRAM_TOKEN   = "8678164580:AAEmznr79S6qO-NDqHkx8gOM-IqpyA884MQ"
 TELEGRAM_CHAT_ID = "2050191721"
 SYMBOL           = "SOL-USDT"
-SCAN_INTERVAL    = 30   # Alle 30 Sek scannen (war 60)
+SCAN_INTERVAL    = 30
 COOLDOWN         = 3600
-MIN_SCORE        = 70   # Hard Filter muss passen, Score für Qualität
 
 last_alert    = load_last_alert()
-last_warning  = load_last_warning()
 active_trades = load_active_trades()
 
 # ─── TELEGRAM ──────────────────────────────────────────────
@@ -86,83 +71,19 @@ def get_candles(symbol, bar, limit=100):
     except Exception as e:
         print(f"[Fehler] Candles {bar}: {e}"); return None
 
-def get_taker_volume_raw():
-    """Gibt rohe Buy/Sell Volumen zurück für Delta-Berechnung"""
-    try:
-        r = requests.get("https://www.okx.com/api/v5/rubik/stat/taker-volume",
-            params={"instId": SYMBOL, "instType": "SPOT", "period": "5m", "limit": 10}, timeout=10)
-        data = r.json().get("data", [])
-        if not data: return 0, 0, 0
-        df = pd.DataFrame(data, columns=["ts","sellVol","buyVol"])
-        df["buyVol"]  = pd.to_numeric(df["buyVol"])
-        df["sellVol"] = pd.to_numeric(df["sellVol"])
-        total_buy  = df["buyVol"].sum()
-        total_sell = df["sellVol"].sum()
-        avg_vol    = (df["buyVol"] + df["sellVol"]).mean()
-        return total_buy - total_sell, total_buy, total_sell
-    except:
-        return 0, 0, 0
-
 def get_funding():
     try:
         r = requests.get("https://www.okx.com/api/v5/public/funding-rate",
             params={"instId": "SOL-USDT-SWAP"}, timeout=10)
         return float(r.json().get("data",[{}])[0].get("fundingRate", 0)) * 100
-    except:
-        return 0.0
+    except: return 0.0
 
 def get_price():
     try:
         r = requests.get("https://www.okx.com/api/v5/market/ticker",
             params={"instId": SYMBOL}, timeout=10)
         return float(r.json().get("data",[{}])[0].get("last", 0))
-    except:
-        return 0.0
-
-# ─── AI ANALYSE (Claude API) ────────────────────────────────
-
-def get_ai_analysis(signal_data):
-    """Ruft Claude API auf für kurze Signal-Analyse vor dem Telegram-Alert"""
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        return None
-
-    sm = signal_data["sm_data"]
-    prompt = (
-        f"Du bist ein erfahrener Crypto-Trader. Analysiere dieses SOL/USDT Signal in max 3 Zeilen auf Deutsch.\n\n"
-        f"Signal: {signal_data['direction']}\n"
-        f"Score: {signal_data['score']}% ({signal_data['grade']})\n"
-        f"ATR Expansion: {sm['atr_expand']}x\n"
-        f"Volumen Ratio: {sm['vol_ratio']}x\n"
-        f"Akkumulation Range: {sm['w_range_pct']}%\n"
-        f"4h + 1h Trend: {signal_data['trend_4h']}\n"
-        f"Session: {signal_data['session']}\n"
-        f"Funding Rate: {signal_data['funding']}%\n\n"
-        f"Bewerte kurz: Ist das Marktregime trending oder choppy? Ist dem Signal zu vertrauen?\n"
-        f"Antwort: max 3 Zeilen, direkt, kein Intro."
-    )
-
-    try:
-        r = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json"
-            },
-            json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 150,
-                "messages": [{"role": "user", "content": prompt}]
-            },
-            timeout=10
-        )
-        if r.status_code == 200:
-            return r.json()["content"][0]["text"].strip()
-        print(f"[AI] Status {r.status_code}")
-    except Exception as e:
-        print(f"[AI] Fehler: {e}")
-    return None
+    except: return 0.0
 
 # ─── INDIKATOREN ───────────────────────────────────────────
 
@@ -183,20 +104,17 @@ def calc_atr(df, period=14):
     ], axis=1).max(axis=1)
     return tr.rolling(period).mean()
 
-def calc_vwap(df):
-    tp = (df["high"] + df["low"] + df["close"]) / 3
-    return (tp * df["vol"]).cumsum() / df["vol"].cumsum()
-
 # ═══════════════════════════════════════════════════════════
-# V14 KERN: SMART MONEY ARCHITEKTUR
+# V15 KERN: WYCKOFF SPRING / UPTHRUST DETECTION
 #
-# STUFE 1 – HARTE PFLICHTFILTER (alle müssen passen)
-# STUFE 2 – SOFT SCORE (Qualitäts-Boost)
-# Philosophie: Weniger Signale, jedes mit Smart Money dahinter
+# Smart Money sammelt STILL in enger Range (Akkumulation).
+# Dann: FAKEOUT unter Support (Spring) oder über Resistance (Upthrust)
+#   → Retail Stops werden abgeräumt
+#   → Sofortige Umkehr = Smart Money Entry
+# Wir steigen EIN wenn Smart Money einsteigt — nicht danach!
 # ═══════════════════════════════════════════════════════════
 
 def get_trend(df, label=""):
-    """Trend-Analyse: Bullish / Bearish / Neutral"""
     if df is None or len(df) < 30:
         return "NEUTRAL", f"⚠️ {label}: Keine Daten"
     ema21 = calc_ema(df["close"], 21).iloc[-1]
@@ -212,179 +130,181 @@ def get_trend(df, label=""):
     return "NEUTRAL", f"⚠️ {label}: NEUTRAL"
 
 
-def detect_smart_money(df15, df5):
+def detect_wyckoff_spring(df15, df5, direction, lookback=24):
     """
-    ═══════════════════════════════════════
-    SMART MONEY DETECTION (Wyckoff-Logik)
-    ═══════════════════════════════════════
-    
-    Signatur: Stille Akkumulation → Volumen-Explosion → Ausbruch
-    
-    Erkennt:
-    1. Enge Konsolidierung (Smart Money sammelt heimlich)
-    2. ATR-Expansion (Markt erwacht)
-    3. Volumen-Explosion (Institutionelle treten aufs Gas)
-    4. Kerzenmuster bestätigt Richtung
+    SPRING (LONG):
+      Kerze bricht unter Akkumulations-Support → schliesst DARÜBER zurück
+      = Smart Money hat alle Stops abgeholt und dreht jetzt nach oben
+
+    UPTHRUST (SHORT):
+      Kerze bricht über Akkumulations-Resistance → schliesst DARUNTER zurück
+      = Smart Money hat alle Stops abgeholt und dreht jetzt nach unten
     """
-    if df15 is None or len(df15) < 20:
+    if df15 is None or len(df15) < lookback + 5:
         return None, []
-    
-    logs = []
-    last = df15.iloc[-1]
+
+    logs  = []
+    last  = df15.iloc[-1]
     price = last["close"]
-    
-    # ── FILTER 1: ATR-Expansion ───────────────────────────
-    ranges = (df15["high"] - df15["low"]).tail(9)
-    avg_range = ranges.iloc[:-1].mean()
-    cur_range = ranges.iloc[-1]
-    atr_expand = cur_range / (avg_range + 1e-10)
-    
-    if atr_expand < 1.4:
-        return None, ["❌ ATR: Kein Ausbruch (" + str(round(atr_expand, 2)) + "x)"]
-    logs.append("✅ ATR-Explosion: " + str(round(atr_expand, 2)) + "x")
-    
-    # ── FILTER 2: Stille Akkumulation davor ──────────────
-    # Letzte 8 Kerzen VOR der aktuellen: enger Bereich!
-    window = df15.tail(9).iloc[:-1]
-    w_high = window["high"].max()
-    w_low  = window["low"].min()
-    w_range_pct = (w_high - w_low) / price * 100
-    
-    if w_range_pct > 2.5:
-        return None, ["❌ Akkumulation: Zu viel Bewegung davor (" + str(round(w_range_pct, 2)) + "%)"]
-    logs.append("✅ Akkumulation: " + str(round(w_range_pct, 2)) + "% Range (Still)")
-    
-    # ── FILTER 3: Volumen-Explosion ───────────────────────
-    vol_avg = df15["vol"].tail(20).mean()
-    vol_now = df15["vol"].iloc[-1]
-    vol_ratio = vol_now / (vol_avg + 1e-10)
-    
-    if vol_ratio < 1.8:
-        return None, ["❌ Volumen: Zu schwach (" + str(round(vol_ratio, 2)) + "x)"]
-    logs.append("✅ Volumen-Explosion: " + str(round(vol_ratio, 2)) + "x")
-    
-    # ── FILTER 4: Kerzenmuster = Richtung ─────────────────
-    is_bull_candle = last["close"] > last["open"]
-    candle_body = abs(last["close"] - last["open"])
-    candle_total = cur_range
-    body_pct = candle_body / (candle_total + 1e-10)
-    
-    if body_pct < 0.3:
-        return None, ["❌ Kerze: Zu viel Docht, kein klares Signal (" + str(round(body_pct*100)) + "% Body)"]
-    
-    direction = "LONG" if is_bull_candle else "SHORT"
-    arrow = "📈 LONG" if direction == "LONG" else "📉 SHORT"
-    logs.append("✅ Kerze " + arrow + " (" + str(round(body_pct*100)) + "% Body)")
-    
-    # ── FILTER 5: Delta nicht gegen uns ───────────────────
-    if df5 is not None and len(df5) >= 8:
-        s5 = df5.tail(8)
+    atr_v = calc_atr(df15).iloc[-1]
+
+    # Akkumulationszone (letzte N Kerzen ohne aktuelle)
+    window    = df15.tail(lookback + 1).iloc[:-1]
+    zone_high = window["high"].max()
+    zone_low  = window["low"].min()
+    zone_size = (zone_high - zone_low) / price * 100
+
+    if zone_size > 5.0 or zone_size < 0.4:
+        return None, [f"❌ Zone {round(zone_size,2)}% – nicht im Bereich (0.4–5%)"]
+    logs.append(f"✅ Akkumulation: {round(zone_size,2)}% Zone (${round(zone_low,2)}–${round(zone_high,2)})")
+
+    vol_avg    = window["vol"].mean()
+    vol_spring = last["vol"]
+    vol_ratio  = vol_spring / (vol_avg + 1e-10)
+    vol_early  = window["vol"].iloc[:lookback//2].mean()
+    vol_late   = window["vol"].iloc[lookback//2:].mean()
+    vol_steigt = vol_late > vol_early * 0.85
+    if vol_steigt: logs.append("✅ Volumen steigt in Zone (Smart Money aktiv)")
+
+    if direction == "LONG":
+        # Fakeout unter zone_low
+        pen = (zone_low - last["low"]) / price * 100
+        if pen <= 0.02 or pen > 2.0:
+            return None, [f"❌ Spring: Penetration {round(pen,3)}% (brauche 0.02–2%)"]
+        if last["close"] < zone_low:
+            return None, ["❌ Schliesst unter zone_low – kein Rebound"]
+        if last["close"] < last["open"]:
+            return None, ["❌ Bearische Kerze – kein bullischer Spring"]
+
+        cr = last["high"] - last["low"]
+        close_pct = (last["close"] - last["low"]) / (cr + 1e-10)
+        if close_pct < 0.45:
+            return None, [f"❌ Kerze schliesst zu tief ({round(close_pct*100)}%)"]
+
+        if vol_ratio < 1.1:
+            return None, [f"❌ Spring-Volumen zu schwach ({round(vol_ratio,2)}x)"]
+
+        # Delta aus 5m
         delta = 0.0
-        for _, row in s5.iterrows():
-            rng = row["high"] - row["low"]
-            if rng == 0: continue
-            cp = (row["close"] - row["low"]) / rng
-            delta += row["vol"] * (cp - (1 - cp))
-        
-        delta_threshold = vol_avg * 0.3
-        if direction == "LONG" and delta < -delta_threshold:
-            return None, ["❌ Delta: Gegen LONG (" + str(round(delta, 0)) + ")"]
-        if direction == "SHORT" and delta > delta_threshold:
-            return None, ["❌ Delta: Gegen SHORT (+" + str(round(delta, 0)) + ")"]
-        
-        delta_str = ("+" if delta >= 0 else "") + str(round(delta, 0))
-        logs.append("✅ Delta: " + delta_str + " (aligned)")
-    
-    return {
-        "direction":   direction,
-        "price":       round(price, 3),
-        "atr_expand":  round(atr_expand, 2),
-        "vol_ratio":   round(vol_ratio, 2),
-        "w_range_pct": round(w_range_pct, 2),
-        "body_pct":    round(body_pct * 100),
-        "atr_val":     calc_atr(df15).iloc[-1]
-    }, logs
+        if df5 is not None and len(df5) >= 5:
+            for _, row in df5.tail(6).iterrows():
+                rng = row["high"] - row["low"]
+                if rng == 0: continue
+                cp = (row["close"] - row["low"]) / rng
+                delta += row["vol"] * (cp - (1 - cp))
+        if delta < -vol_avg * 0.5:
+            return None, [f"❌ Delta bearisch beim Spring ({round(delta,0)})"]
 
+        rsi_val = calc_rsi(df15["close"]).iloc[-1]
+        if rsi_val > 72:
+            return None, [f"❌ RSI überkauft: {round(rsi_val,1)}"]
 
-def calc_quality_score(sm_data, direction, df15, df1h, df30, df5, session_factor):
-    """
-    SOFT SCORE: Nur für Qualitäts-Boost NACH bestandenen Hard Filters.
-    Basis: 50 Punkte (Hard Filter bestanden)
-    Max: 100 Punkte
-    """
-    score = 50
-    sig_lines = []
+        logs += [
+            f"✅ Spring: {round(pen,3)}% unter zone_low → Rebound!",
+            f"✅ Kerze: {round(close_pct*100)}% oben (bullisch)",
+            f"✅ Volumen: {round(vol_ratio,2)}x",
+            f"✅ Delta: {'+' if delta>=0 else ''}{round(delta,0)}",
+            f"✅ RSI: {round(rsi_val,1)}"
+        ]
 
-    # Volumen-Stärke
-    vr = sm_data["vol_ratio"]
-    if vr > 5.0:   score += 15; sig_lines.append("🔥 Volumen extrem stark (" + str(round(vr,1)) + "x)")
-    elif vr > 3.5: score += 10; sig_lines.append("✅ Volumen sehr stark (" + str(round(vr,1)) + "x)")
-    elif vr > 2.5: score += 7;  sig_lines.append("✅ Volumen stark (" + str(round(vr,1)) + "x)")
-    else:          score += 3;  sig_lines.append("🔵 Volumen ok (" + str(round(vr,1)) + "x)")
+        score = 60
+        if vol_ratio > 2.0:   score += 15
+        elif vol_ratio > 1.5: score += 10
+        else:                  score += 5
+        if pen < 0.3:          score += 10
+        if close_pct > 0.7:    score += 10
+        if vol_steigt:         score += 5
+        if rsi_val < 45:       score += 5
 
-    # ATR-Expansion
-    ae = sm_data["atr_expand"]
-    if ae > 3.0:   score += 10; sig_lines.append("🔥 ATR extrem (" + str(round(ae,1)) + "x)")
-    elif ae > 2.0: score += 7;  sig_lines.append("✅ ATR stark (" + str(round(ae,1)) + "x)")
-    else:          score += 3;  sig_lines.append("🔵 ATR ok (" + str(round(ae,1)) + "x)")
+        return {
+            "direction": "LONG", "price": round(price, 3),
+            "zone_low": round(zone_low,3), "zone_high": round(zone_high,3),
+            "zone_size": round(zone_size,2), "pen": round(pen,3),
+            "vol_ratio": round(vol_ratio,2), "close_pct": round(close_pct*100),
+            "atr_val": atr_v, "rsi": round(rsi_val,1),
+            "delta": round(delta,0), "score": min(100, score)
+        }, logs
 
-    # Enge Akkumulation (je enger, desto besser)
-    wr = sm_data["w_range_pct"]
-    if wr < 0.8:   score += 10; sig_lines.append("✅ Sehr enge Akkumulation (" + str(wr) + "%)")
-    elif wr < 1.5: score += 5;  sig_lines.append("✅ Enge Akkumulation (" + str(wr) + "%)")
-    else:          score += 2;  sig_lines.append("🔵 Akkumulation " + str(wr) + "%")
+    else:  # SHORT Upthrust
+        pen = (last["high"] - zone_high) / price * 100
+        if pen <= 0.02 or pen > 2.0:
+            return None, [f"❌ Upthrust: Penetration {round(pen,3)}% (brauche 0.02–2%)"]
+        if last["close"] > zone_high:
+            return None, ["❌ Schliesst über zone_high – kein Rebound"]
+        if last["close"] > last["open"]:
+            return None, ["❌ Bullische Kerze – kein bearischer Upthrust"]
 
-    # 30m Struktur
-    if df30 is not None and len(df30) >= 20:
-        e21 = calc_ema(df30["close"], 21).iloc[-1]
-        e50 = calc_ema(df30["close"], 50).iloc[-1]
-        p   = df30["close"].iloc[-1]
-        if direction == "LONG" and p > e21 > e50:
-            score += 5; sig_lines.append("✅ 30m: EMA bullish")
-        elif direction == "SHORT" and p < e21 < e50:
-            score += 5; sig_lines.append("✅ 30m: EMA bearish")
-        else:
-            sig_lines.append("⚠️ 30m: EMA neutral")
+        cr = last["high"] - last["low"]
+        close_pct = (last["high"] - last["close"]) / (cr + 1e-10)
+        if close_pct < 0.45:
+            return None, [f"❌ Kerze schliesst zu hoch ({round(close_pct*100)}%)"]
 
-    # 5m RSI Timing
-    if df5 is not None and len(df5) >= 15:
-        rsi = calc_rsi(df5["close"]).iloc[-1]
-        if direction == "LONG":
-            if rsi < 45:   score += 5; sig_lines.append("✅ 5m RSI: " + str(round(rsi,1)) + " (gut)")
-            elif rsi > 65: score -= 5; sig_lines.append("⚠️ 5m RSI: " + str(round(rsi,1)) + " (hoch)")
-            else:          sig_lines.append("🔵 5m RSI: " + str(round(rsi,1)))
-        else:
-            if rsi > 55:   score += 5; sig_lines.append("✅ 5m RSI: " + str(round(rsi,1)) + " (gut)")
-            elif rsi < 35: score -= 5; sig_lines.append("⚠️ 5m RSI: " + str(round(rsi,1)) + " (niedrig)")
-            else:          sig_lines.append("🔵 5m RSI: " + str(round(rsi,1)))
+        if vol_ratio < 1.1:
+            return None, [f"❌ Upthrust-Volumen zu schwach ({round(vol_ratio,2)}x)"]
 
-    # Session-Bonus
-    if session_factor >= 1.30:
-        score += 5; sig_lines.append("🔥 London/NY Overlap!")
-    elif session_factor >= 1.20:
-        score += 3; sig_lines.append("✅ London/NY Session")
+        delta = 0.0
+        if df5 is not None and len(df5) >= 5:
+            for _, row in df5.tail(6).iterrows():
+                rng = row["high"] - row["low"]
+                if rng == 0: continue
+                cp = (row["close"] - row["low"]) / rng
+                delta += row["vol"] * (cp - (1 - cp))
+        if delta > vol_avg * 0.5:
+            return None, [f"❌ Delta bullisch beim Upthrust (+{round(delta,0)})"]
 
-    return min(100, score), sig_lines
+        rsi_val = calc_rsi(df15["close"]).iloc[-1]
+        if rsi_val < 28:
+            return None, [f"❌ RSI überverkauft: {round(rsi_val,1)}"]
+
+        logs += [
+            f"✅ Upthrust: {round(pen,3)}% über zone_high → Rebound!",
+            f"✅ Kerze: {round(close_pct*100)}% unten (bearisch)",
+            f"✅ Volumen: {round(vol_ratio,2)}x",
+            f"✅ Delta: {round(delta,0)}",
+            f"✅ RSI: {round(rsi_val,1)}"
+        ]
+
+        score = 60
+        if vol_ratio > 2.0:   score += 15
+        elif vol_ratio > 1.5: score += 10
+        else:                  score += 5
+        if pen < 0.3:          score += 10
+        if close_pct > 0.7:    score += 10
+        if vol_steigt:         score += 5
+        if rsi_val > 55:       score += 5
+
+        return {
+            "direction": "SHORT", "price": round(price, 3),
+            "zone_low": round(zone_low,3), "zone_high": round(zone_high,3),
+            "zone_size": round(zone_size,2), "pen": round(pen,3),
+            "vol_ratio": round(vol_ratio,2), "close_pct": round(close_pct*100),
+            "atr_val": atr_v, "rsi": round(rsi_val,1),
+            "delta": round(delta,0), "score": min(100, score)
+        }, logs
 
 
 def get_session():
     hour = datetime.now().hour
-    if 14 <= hour < 17:   return "OVERLAP",   "London/NY Overlap 🔥", 1.30
-    elif 8 <= hour < 18:  return "LONDON_NY", "London/NY Session",    1.20
-    elif 0 <= hour < 8:   return "ASIA",      "Asia Session",          1.00
-    else:                  return "EVENING",   "Evening Session",       1.00
+    if 14 <= hour < 17:   return "OVERLAP",   "London/NY Overlap 🔥"
+    elif 8 <= hour < 18:  return "LONDON_NY", "London/NY Session"
+    elif 0 <= hour < 8:   return "ASIA",      "Asia Session"
+    else:                  return "EVENING",   "Evening Session"
 
 
 def calc_stops(direction, price, atr):
     atr = max(atr, price * 0.004)
     if direction == "LONG":
-        sl = round(price - atr*1.5, 3); t1 = round(price + atr*1.5, 3)
-        t2 = round(price + atr*3.0, 3); t3 = round(price + atr*7.0, 3)
-        t1_be = round(price + atr*1.8, 3)
+        sl    = round(price - atr * 1.5, 3)
+        t1    = round(price + atr * 1.5, 3)
+        t2    = round(price + atr * 3.0, 3)
+        t3    = round(price + atr * 7.0, 3)
+        t1_be = round(price + atr * 1.8, 3)
     else:
-        sl = round(price + atr*1.5, 3); t1 = round(price - atr*1.5, 3)
-        t2 = round(price - atr*3.0, 3); t3 = round(price - atr*7.0, 3)
-        t1_be = round(price - atr*1.8, 3)
+        sl    = round(price + atr * 1.5, 3)
+        t1    = round(price - atr * 1.5, 3)
+        t2    = round(price - atr * 3.0, 3)
+        t3    = round(price - atr * 7.0, 3)
+        t1_be = round(price - atr * 1.8, 3)
     risk = abs(price - sl)
     return {
         "sl": sl, "t1": t1, "t2": t2, "t3": t3, "t1_be": t1_be,
@@ -409,98 +329,74 @@ def check_active_trades():
                 result = "BE" if t["sl"] >= entry else "SL"
                 pnl = round((t["sl"]-entry)/entry*100, 2)
                 icon = "➡️" if result == "BE" else "🔴"
-                send_telegram(icon + " <b>" + result + "!</b>\nSOL LONG | Entry: $" + str(entry) + " | Exit: $" + str(t["sl"]) + " | PnL: " + str(pnl) + "%")
+                send_telegram(f'{icon} <b>{result}!</b>\nSOL LONG | Entry: ${entry} | Exit: ${t["sl"]} | PnL: {pnl}%')
                 completed.append(t); changed = True
             elif price >= t["t3"]:
                 pnl = round((t["t3"]-entry)/entry*100, 2)
-                send_telegram("🚀 <b>T3! +" + str(pnl) + "%</b>\nSOL LONG | T3: $" + str(t["t3"]))
+                send_telegram(f'🚀 <b>T3! +{pnl}%</b>\nSOL LONG | T3: ${t["t3"]}')
                 completed.append(t); changed = True
             elif price >= t["t2"] and not t.get("t2_hit"):
                 t["t2_hit"] = True; t["sl"] = t["t1"]
-                send_telegram("🎯 <b>T2!</b> SL auf $" + str(t["t1"]) + "\nSOL LONG"); changed = True
+                send_telegram(f'🎯 <b>T2!</b> SL auf ${t["t1"]}\nSOL LONG'); changed = True
             elif price >= t["t1_be"] and not t.get("t1_hit"):
                 t["t1_hit"] = True; be = round(entry + atr_e*0.15, 3); t["sl"] = be
-                send_telegram("🎯 <b>T1!</b> SL auf BE $" + str(be) + "\nSOL LONG"); changed = True
+                send_telegram(f'🎯 <b>T1!</b> SL auf BE ${be}\nSOL LONG'); changed = True
         else:
             if price >= t["sl"]:
                 result = "BE" if t["sl"] <= entry else "SL"
                 pnl = round((entry-t["sl"])/entry*100, 2)
                 icon = "➡️" if result == "BE" else "🔴"
-                send_telegram(icon + " <b>" + result + "!</b>\nSOL SHORT | Entry: $" + str(entry) + " | Exit: $" + str(t["sl"]) + " | PnL: " + str(pnl) + "%")
+                send_telegram(f'{icon} <b>{result}!</b>\nSOL SHORT | Entry: ${entry} | Exit: ${t["sl"]} | PnL: {pnl}%')
                 completed.append(t); changed = True
             elif price <= t["t3"]:
                 pnl = round((entry-t["t3"])/entry*100, 2)
-                send_telegram("🚀 <b>T3! +" + str(pnl) + "%</b>\nSOL SHORT | T3: $" + str(t["t3"]))
+                send_telegram(f'🚀 <b>T3! +{pnl}%</b>\nSOL SHORT | T3: ${t["t3"]}')
                 completed.append(t); changed = True
             elif price <= t["t2"] and not t.get("t2_hit"):
                 t["t2_hit"] = True; t["sl"] = t["t1"]
-                send_telegram("🎯 <b>T2!</b> SL auf $" + str(t["t1"]) + "\nSOL SHORT"); changed = True
+                send_telegram(f'🎯 <b>T2!</b> SL auf ${t["t1"]}\nSOL SHORT'); changed = True
             elif price <= t["t1_be"] and not t.get("t1_hit"):
                 t["t1_hit"] = True; be = round(entry - atr_e*0.15, 3); t["sl"] = be
-                send_telegram("🎯 <b>T1!</b> SL auf BE $" + str(be) + "\nSOL SHORT"); changed = True
+                send_telegram(f'🎯 <b>T1!</b> SL auf BE ${be}\nSOL SHORT'); changed = True
     active_trades = [t for t in active_trades if t not in completed]
     if changed: save_active_trades(active_trades)
 
-# ─── HAUPT-ANALYSE V14 ─────────────────────────────────────
+# ─── HAUPT-ANALYSE V15 ─────────────────────────────────────
 
 def analyze():
-    # Daten laden
-    df15 = get_candles(SYMBOL, "15m", 60)
+    df15 = get_candles(SYMBOL, "15m", 80)
     df1h = get_candles(SYMBOL, "1H",  60)
     df4h = get_candles(SYMBOL, "4H",  60)
-    df30 = get_candles(SYMBOL, "30m", 60)
-    df5  = get_candles(SYMBOL, "5m",  60)
+    df5  = get_candles(SYMBOL, "5m",  30)
 
-    if df15 is None or df1h is None:
-        return None
+    if df15 is None or df1h is None: return None
 
-    # ══ HARD FILTER 1: 4h UND 1h müssen aligned sein ══
     trend_4h, sig_4h = get_trend(df4h, "4h")
     trend_1h, sig_1h = get_trend(df1h, "1h")
 
-    if trend_4h == "NEUTRAL" or trend_1h == "NEUTRAL":
-        return None
-    if trend_4h != trend_1h:
-        # Contra-Trade: warnen aber KEIN Signal!
-        return None
+    if trend_4h == "NEUTRAL" or trend_1h == "NEUTRAL": return None
+    if trend_4h != trend_1h: return None
 
     direction = "LONG" if trend_4h == "BULLISH" else "SHORT"
 
-    # ══ HARD FILTERS 2-6: Smart Money Detection ══
-    sm_data, sm_logs = detect_smart_money(df15, df5)
-    if sm_data is None:
-        return None  # Hard Filter nicht bestanden
+    result, logs = detect_wyckoff_spring(df15, df5, direction, lookback=24)
+    if result is None: return None
+    if result["score"] < 65: return None
 
-    # Richtung aus Smart Money muss mit Trend übereinstimmen
-    if sm_data["direction"] != direction:
-        return None  # Kerze zeigt gegen Trend
-
-    # ══ SOFT SCORE: Qualitäts-Bewertung ══
-    session_id, session_name, session_factor = get_session()
-    score, score_logs = calc_quality_score(
-        sm_data, direction, df15, df1h, df30, df5, session_factor
-    )
-
-    if score < MIN_SCORE:
-        return None
-
+    session_id, session_name = get_session()
     funding = get_funding()
-    price   = sm_data["price"]
-    atr     = max(sm_data["atr_val"], price * 0.004)
+    price   = result["price"]
+    atr     = max(result["atr_val"], price * 0.004)
     stops   = calc_stops(direction, price, atr)
-
-    grade = "A+++" if score >= 85 else ("A++" if score >= 75 else "A+")
+    grade   = "A+++" if result["score"] >= 85 else ("A++" if result["score"] >= 75 else "A+")
 
     return {
-        "score": score, "grade": grade,
+        "score": result["score"], "grade": grade,
         "price": price, "direction": direction,
-        "session": session_name,
-        "stops": stops, "funding": funding,
+        "session": session_name, "stops": stops, "funding": funding,
         "entry_low":  round(price * 0.999, 3),
         "entry_high": round(price * 1.001, 3),
-        "sm_data": sm_data,
-        "sm_logs": sm_logs,
-        "score_logs": score_logs,
+        "result": result, "logs": logs,
         "sig_4h": sig_4h, "sig_1h": sig_1h,
         "trend_4h": trend_4h
     }
@@ -510,125 +406,35 @@ def analyze():
 def format_alert(data):
     s     = data["stops"]
     d     = data["direction"]
+    r     = data["result"]
     arrow = "📈 LONG" if d == "LONG" else "📉 SHORT"
-    sm    = data["sm_data"]
+    stype = "🌱 SPRING" if d == "LONG" else "📍 UPTHRUST"
 
     lines = [
         "——————————————————",
-        "💰 <b>SOL/USDT</b>  " + arrow,
-        "🧠 <b>Smart Money Signal V14</b>",
-        "📊 <b>Score: " + str(data["score"]) + "% (" + data["grade"] + ")</b>",
-        "🕐 " + data["session"],
+        f"💰 <b>SOL/USDT</b>  {arrow}",
+        f"🧠 <b>Wyckoff {stype} V15</b>",
+        f"📊 <b>Score: {data['score']}% ({data['grade']})</b>",
+        f"🕐 {data['session']}",
         "——————————————————",
-        "📍 <b>Entry:</b> $" + str(data["entry_low"]) + " – $" + str(data["entry_high"]),
-        "🔴 <b>SL:</b> $" + str(s["sl"]) + "  <i>(ATR: " + str(s["atr"]) + ")</i>",
+        f"📍 <b>Entry:</b> ${data['entry_low']} – ${data['entry_high']}",
+        f"🔴 <b>SL:</b> ${s['sl']}  <i>(ATR: {s['atr']})</i>",
         "——————————————————",
-        "🎯 <b>T1:</b> $" + str(s["t1"]) + "  (RR 1:" + str(s["rr1"]) + ") → BE!",
-        "🎯 <b>T2:</b> $" + str(s["t2"]) + "  (RR 1:" + str(s["rr2"]) + ") → SL auf T1",
-        "🚀 <b>T3:</b> $" + str(s["t3"]) + "  (RR 1:" + str(s["rr3"]) + ") → Volltreffer!",
+        f"🎯 <b>T1:</b> ${s['t1']}  (RR 1:{s['rr1']}) → BE!",
+        f"🎯 <b>T2:</b> ${s['t2']}  (RR 1:{s['rr2']}) → SL auf T1",
+        f"🚀 <b>T3:</b> ${s['t3']}  (RR 1:{s['rr3']}) → Volltreffer!",
         "——————————————————",
-        "✅ 4h + 1h aligned: " + data["trend_4h"],
+        f"📐 Zone: ${r['zone_low']}–${r['zone_high']} ({r['zone_size']}%)",
+        f"💥 Fakeout: {r['pen']}% | Rebound: {r['close_pct']}% Body",
         "——————————————————",
-        "<b>🧠 Smart Money Bestätigung:</b>",
+        "<b>🔍 Wyckoff Bestätigung:</b>",
     ]
-
-    # Smart Money Logs
-    for log in data["sm_logs"]:
+    for log in data["logs"]:
         lines.append(log)
-
-    lines.append("——————————————————")
-    lines.append("<b>📊 Qualitäts-Score Faktoren:</b>")
-
-    for log in data["score_logs"]:
-        lines.append(log)
-
     lines += [
         "——————————————————",
-        data["sig_4h"],
-        data["sig_1h"],
-        "🔵 Funding: " + str(round(data["funding"], 3)) + "%",
-    ]
-
-    # AI Analyse
-    ai_text = get_ai_analysis(data)
-    if ai_text:
-        lines.append("——————————————————")
-        lines.append("🤖 <b>AI Analyse:</b>")
-        for line in ai_text.split("\n"):
-            if line.strip():
-                lines.append(line.strip())
-
-    lines += [
-        "——————————————————",
-        "⚠️ <i>Kein Auto-Trade – du entscheidest!</i>"
-    ]
-    return "\n".join(lines)
-
-# ─── PULLBACK DETECTION (vereinfacht, V13-bewährt) ─────────
-
-def check_pullback(direction):
-    df5  = get_candles(SYMBOL, "5m",  60)
-    df15 = get_candles(SYMBOL, "15m", 60)
-    if df5 is None or df15 is None or len(df5) < 20:
-        return None
-    price     = df5["close"].iloc[-1]
-    atr       = calc_atr(df5).iloc[-1]
-    rsi       = calc_rsi(df5["close"]).iloc[-1]
-    ema9      = calc_ema(df5["close"], 9).iloc[-1]
-    ema21_15m = calc_ema(df15["close"], 21).iloc[-1]
-    tolerance = atr * 0.6
-
-    # Strukturelle 15m Levels
-    highs_15m = []; lows_15m = []
-    for i in range(2, min(40, len(df15)-2)):
-        if df15["high"].iloc[-i] > df15["high"].iloc[-i-1] and df15["high"].iloc[-i] > df15["high"].iloc[-i+1]:
-            highs_15m.append(df15["high"].iloc[-i])
-        if df15["low"].iloc[-i] < df15["low"].iloc[-i-1] and df15["low"].iloc[-i] < df15["low"].iloc[-i+1]:
-            lows_15m.append(df15["low"].iloc[-i])
-
-    if direction == "LONG":
-        for level in highs_15m[:5]:
-            if level < price * 0.999 and abs(price - level) <= tolerance:
-                if rsi < 65 and price > ema9 and price > level:
-                    last3 = df5["close"].tail(3)
-                    if last3.iloc[-1] >= last3.min() * 0.998:
-                        return {"direction":"LONG","level":round(level,3),"price":round(price,3),"atr":round(atr,3),"rsi":round(rsi,1),"type":"Ehem. Widerstand → Support"}
-        if abs(price - ema21_15m) <= tolerance and price > ema21_15m and rsi < 60:
-            return {"direction":"LONG","level":round(ema21_15m,3),"price":round(price,3),"atr":round(atr,3),"rsi":round(rsi,1),"type":"EMA21 (15m) Support"}
-    else:
-        for level in lows_15m[:5]:
-            if level > price * 1.001 and abs(price - level) <= tolerance:
-                if rsi > 35 and price < ema9 and price < level:
-                    last3 = df5["close"].tail(3)
-                    if last3.iloc[-1] <= last3.max() * 1.002:
-                        return {"direction":"SHORT","level":round(level,3),"price":round(price,3),"atr":round(atr,3),"rsi":round(rsi,1),"type":"Ehem. Support → Widerstand"}
-        if abs(price - ema21_15m) <= tolerance and price < ema21_15m and rsi > 40:
-            return {"direction":"SHORT","level":round(ema21_15m,3),"price":round(price,3),"atr":round(atr,3),"rsi":round(rsi,1),"type":"EMA21 (15m) Widerstand"}
-    return None
-
-def format_pullback(pb, session_name):
-    d = pb["direction"]; arrow = "📈 LONG" if d == "LONG" else "📉 SHORT"
-    atr = pb["atr"]; price = pb["price"]
-    if d == "LONG":
-        sl = round(price-atr*1.5,3); t1 = round(price+atr*1.5,3)
-        t2 = round(price+atr*3.0,3); t3 = round(price+atr*7.0,3)
-    else:
-        sl = round(price+atr*1.5,3); t1 = round(price-atr*1.5,3)
-        t2 = round(price-atr*3.0,3); t3 = round(price-atr*7.0,3)
-    risk = abs(price - sl)
-    lines = [
-        "——————————————————",
-        "🔄 <b>PULLBACK ENTRY!</b>  " + arrow,
-        "🕐 " + session_name,
-        "——————————————————",
-        "📍 Level: $" + str(pb["level"]) + "  <i>(" + pb.get("type","Retest") + ")</i>",
-        "💰 Aktuell: $" + str(price),
-        "📊 RSI: " + str(pb["rsi"]),
-        "——————————————————",
-        "🔴 <b>SL:</b> $" + str(sl),
-        "🎯 <b>T1:</b> $" + str(t1) + "  (RR 1:" + str(round(abs(price-t1)/risk,1)) + ")",
-        "🎯 <b>T2:</b> $" + str(t2) + "  (RR 1:" + str(round(abs(price-t2)/risk,1)) + ")",
-        "🚀 <b>T3:</b> $" + str(t3) + "  (RR 1:" + str(round(abs(price-t3)/risk,1)) + ")",
+        data["sig_4h"], data["sig_1h"],
+        f"🔵 Funding: {round(data['funding'], 3)}%",
         "——————————————————",
         "⚠️ <i>Kein Auto-Trade – du entscheidest!</i>"
     ]
@@ -637,77 +443,47 @@ def format_pullback(pb, session_name):
 # ─── MAIN ──────────────────────────────────────────────────
 
 def main():
-    global last_alert, last_warning, active_trades
+    global last_alert, active_trades
     print("=" * 60)
-    print("   SOL A+++ Scanner V14 – Smart Money Edition")
-    print("   🧠 Wyckoff: Akkumulation → Explosion")
-    print("   ✅ HARD FILTER: 4h + 1h aligned (KEIN Gegentrade!)")
-    print("   💥 ATR-Explosion + Akkumulation + Volumen-Explosion")
-    print("   📊 Qualitäts-Score ab 70%")
+    print("   SOL A+++ Scanner V15 – Wyckoff Spring Edition")
+    print("   🌱 SPRING:   Fakeout unter Support  → Smart Money kauft")
+    print("   📍 UPTHRUST: Fakeout über Resistance → Smart Money shortet")
+    print("   🧠 Entry BEVOR der Trend startet – nicht danach!")
     print("=" * 60)
 
     if active_trades:
-        print("♻️ " + str(len(active_trades)) + " Trade(s) wiederhergestellt!")
-        send_telegram("♻️ <b>V14 Restart – " + str(len(active_trades)) + " Trade(s) wiederhergestellt!</b>")
+        print(f"♻️ {len(active_trades)} Trade(s) wiederhergestellt!")
+        send_telegram(f"♻️ <b>V15 Restart – {len(active_trades)} Trade(s) wiederhergestellt!</b>")
     else:
         send_telegram(
-            "🚀 <b>SOL Scanner V14 – Smart Money Edition!</b>\n\n"
-            "🧠 <b>Neue Architektur:</b>\n"
-            "✅ Hard Filter 1: 4h + 1h müssen aligned sein\n"
-            "✅ Hard Filter 2: ATR-Explosion (Markt erwacht)\n"
-            "✅ Hard Filter 3: Stille Akkumulation davor\n"
-            "✅ Hard Filter 4: Volumen-Explosion ≥1.8x\n"
-            "✅ Hard Filter 5: Kerzenrichtung bestätigt\n"
-            "✅ Hard Filter 6: Delta nicht gegen uns\n\n"
-            "📊 Qualitäts-Score: 70%+ für Signal\n"
-            "🎯 Weniger Signale – jedes mit Smart Money\n\n"
-            "Warte auf Setup... 👀"
+            "🚀 <b>SOL Scanner V15 – Wyckoff Spring Edition!</b>\n\n"
+            "🧠 <b>Neue Philosophie: Smart Money früher erwischen</b>\n\n"
+            "🌱 <b>Spring (LONG):</b>\n"
+            "Enge Akkumulationszone → kurzer Fakeout unter Support\n"
+            "→ Retail Stops werden abgeräumt\n"
+            "→ Sofortiger Rebound = Smart Money kauft!\n\n"
+            "📍 <b>Upthrust (SHORT):</b>\n"
+            "Enge Zone → Fakeout über Resistance\n"
+            "→ Retail Longs werden gestoppt\n"
+            "→ Sofortiger Reversal = Smart Money shortet!\n\n"
+            "✅ Filter: 4h+1h aligned | Delta | RSI | Volumen\n"
+            "📊 Weniger Signale – PRÄZISER Entry\n\n"
+            "Warte auf Spring/Upthrust... 👀"
         )
 
     print("Startup: 3 Minuten warten...")
     time.sleep(180)
     print("Bereit!")
 
-    last_scan = 0; last_check = 0; last_pb_scan = 0
+    last_scan = 0; last_check = 0
 
     while True:
         now = time.time()
 
-        # Trade Tracking alle 30 Sek
         if now - last_check >= 30:
             last_check = now
             check_active_trades()
 
-        # Pullback Check alle 30 Sek
-        if now - last_pb_scan >= 30:
-            last_pb_scan = now
-            session_id, session_name, _ = get_session()
-            df1h_pb = get_candles(SYMBOL, "1H", 50)
-            if df1h_pb is not None:
-                trend_pb, _ = get_trend(df1h_pb, "1h")
-                if trend_pb != "NEUTRAL":
-                    d_pb = "LONG" if trend_pb == "BULLISH" else "SHORT"
-                    pullback = check_pullback(d_pb)
-                    if pullback and (now - last_alert) > COOLDOWN:
-                        pb_msg = format_pullback(pullback, session_name)
-                        if send_telegram(pb_msg):
-                            last_alert = now; save_last_alert(now)
-                            atr = pullback["atr"]; p = pullback["price"]
-                            s = {
-                                "sl":    round(p-atr*1.5,3) if d_pb=="LONG" else round(p+atr*1.5,3),
-                                "t1":    round(p+atr*1.5,3) if d_pb=="LONG" else round(p-atr*1.5,3),
-                                "t1_be": round(p+atr*1.8,3) if d_pb=="LONG" else round(p-atr*1.8,3),
-                                "t2":    round(p+atr*3.0,3) if d_pb=="LONG" else round(p-atr*3.0,3),
-                                "t3":    round(p+atr*7.0,3) if d_pb=="LONG" else round(p-atr*7.0,3),
-                                "atr":   atr
-                            }
-                            active_trades.append({"direction": d_pb, "entry": p,
-                                "sl": s["sl"], "orig_sl": s["sl"], "t1": s["t1"], "t1_be": s["t1_be"],
-                                "t2": s["t2"], "t3": s["t3"], "atr": s["atr"], "t1_hit": False, "t2_hit": False})
-                            save_active_trades(active_trades)
-                            print("[PULLBACK] Signal gesendet!")
-
-        # Haupt-Scan
         if now - last_scan >= SCAN_INTERVAL:
             last_scan = now
             ts = datetime.now().strftime("%H:%M:%S")
@@ -715,14 +491,20 @@ def main():
 
             if result:
                 s = result["stops"]
-                print(f"[{ts}] SIGNAL! {result['direction']} | Score: {result['score']}% | ATR:{result['sm_data']['atr_expand']}x Vol:{result['sm_data']['vol_ratio']}x")
+                r = result["result"]
+                stype = "🌱 SPRING" if result["direction"] == "LONG" else "📍 UPTHRUST"
+                print(f"[{ts}] {stype} {result['direction']} | Score:{result['score']}% | Pen:{r['pen']}% | VR:{r['vol_ratio']}x")
                 if (now - last_alert) > COOLDOWN:
                     if send_telegram(format_alert(result)):
                         last_alert = now; save_last_alert(now)
                         active_trades.append({
-                            "direction": result["direction"], "entry": result["price"],
-                            "sl": s["sl"], "orig_sl": s["sl"], "t1": s["t1"], "t1_be": s["t1_be"],
-                            "t2": s["t2"], "t3": s["t3"], "atr": s["atr"], "t1_hit": False, "t2_hit": False
+                            "direction": result["direction"],
+                            "entry":  result["price"],
+                            "sl":     s["sl"], "orig_sl": s["sl"],
+                            "t1":     s["t1"], "t1_be":   s["t1_be"],
+                            "t2":     s["t2"], "t3":      s["t3"],
+                            "atr":    s["atr"],
+                            "t1_hit": False, "t2_hit": False
                         })
                         save_active_trades(active_trades)
                         print("  Trade getrackt!")
@@ -730,10 +512,9 @@ def main():
                     remaining = round((COOLDOWN - (now - last_alert)) / 60)
                     print(f"  Cooldown: {remaining} min")
             else:
-                print(f"[{ts}] Kein Setup")
+                print(f"[{ts}] Kein Spring/Upthrust")
 
         time.sleep(10)
 
 if __name__ == "__main__":
     main()
-
