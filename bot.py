@@ -174,9 +174,14 @@ def get_trend(df, label=""):
 
 def check_adx_filter(df1h):
     """
-    HARD FILTER: ADX auf 1H muss >= 25
-    Verhindert Trades in Seitwärtsmärkten.
-    Backtest: dieser Filter alleine erhöht PF von 2.77 → 4.36
+    HARD FILTER: ADX auf 1H — Session-abhängig
+    
+    London/NY + Overlap:  ADX >= 25  (normaler Filter)
+    Asia + Evening:       ADX >= 30  (strenger – wenig Volumen!)
+    
+    Grund: Asia Session hat dünnes Volumen → Breakouts oft Fakeouts.
+    Erster echter Trade (21.03 05:05 Uhr) war genau so ein Asia-Fakeout
+    bei ADX 26.5 → wäre mit diesem Filter verhindert worden!
     """
     if df1h is None or len(df1h) < 30:
         return False, 0.0, "⚠️ ADX: Keine Daten"
@@ -185,10 +190,20 @@ def check_adx_filter(df1h):
     if pd.isna(adx_now):
         return False, 0.0, "⚠️ ADX: Kein Wert"
     adx_now = round(adx_now, 1)
-    if adx_now < 25:
-        return False, adx_now, f"❌ ADX: {adx_now} (min 25 – Seitwärts!)"
+
+    # Session-abhängige ADX-Schwelle
+    hour = datetime.now().hour
+    if 14 <= hour < 17:   # London/NY Overlap
+        min_adx = 25; session_label = "Overlap"
+    elif 8 <= hour < 18:  # London/NY
+        min_adx = 25; session_label = "London/NY"
+    else:                  # Asia + Evening (00-08 + 18-24)
+        min_adx = 30; session_label = "Asia/Evening"
+
+    if adx_now < min_adx:
+        return False, adx_now, f"❌ ADX: {adx_now} (min {min_adx} für {session_label} – zu schwach!)"
     strength = "🔥 sehr stark" if adx_now > 50 else ("✅ stark" if adx_now > 35 else "✅ ok")
-    return True, adx_now, f"✅ ADX: {adx_now} ({strength})"
+    return True, adx_now, f"✅ ADX: {adx_now} ({strength}) [{session_label}: min {min_adx}]"
 
 
 def detect_breakout(df15, direction):
@@ -583,13 +598,10 @@ def main():
     else:
         send_telegram(
             "🚀 <b>SOL Scanner V14.1 – Smart Money Edition!</b>\n\n"
-            "📊 <b>Backtest-Verbesserungen:</b>\n"
-            "V14 Original:  PF 2.77 | WR 52%\n"
-            "V14.1 neu:     PF 7.34 | WR 73% ✅\n\n"
-            "🆕 <b>Neue Hard Filter:</b>\n"
-            "📊 ADX >= 25 → kein Signal in Seitwärtsmärkten\n"
-            "   (Hauptgrund für SLs war ADX < 25!)\n"
-            "🕯️ Mind. 2 konsekutive Kerzen → echtes Momentum\n\n"
+            "🆕 <b>Update: Session-ADX Filter</b>\n"
+            "📊 London/NY:    ADX >= 25\n"
+            "📊 Asia/Evening: ADX >= 30 ← NEU!\n"
+            "   Asia hat dünnes Volumen → mehr Fakeouts\n\n"
             "🔀 <b>Zwei Signal-Typen:</b>\n"
             "💥 Breakout – klassisch, bewährt\n"
             "🌱 Spring   – Wyckoff Fakeout, präziser Entry\n\n"
