@@ -85,6 +85,79 @@ def get_price():
         return float(r.json().get("data",[{}])[0].get("last", 0))
     except: return 0.0
 
+def get_btc_candles(bar, limit=30):
+    """BTC Daten für 5m Exit-Warnung"""
+    try:
+        r = requests.get("https://www.okx.com/api/v5/market/candles",
+            params={"instId": "BTC-USDT", "bar": bar, "limit": limit}, timeout=10)
+        data = r.json().get("data", [])
+        if not data: return None
+        df = pd.DataFrame(data, columns=["ts","open","high","low","close","vol","v1","v2","c"])
+        for col in ["open","high","low","close","vol"]: df[col] = pd.to_numeric(df[col])
+        df["ts"] = pd.to_numeric(df["ts"])
+        return df.iloc[::-1].reset_index(drop=True)
+    except: return None
+
+# NEU V14.2: BTC 5m Exit-Warnung
+last_btc_warning = 0   # damit wir nicht jede Sekunde warnen
+
+def check_btc_exit_warning(active_trades):
+    """
+    V14.2: BTC 5m Exit-Warnung
+    ════════════════════════════════════════════
+    BTC läuft SOL um ~1-5 Minuten voraus.
+    Wenn BTC in einer 5m Kerze stark dreht
+    UND wir einen offenen Trade haben:
+    → Sofort Telegram-Warnung senden
+    → Du kannst früher entscheiden ob du rausgehst
+
+    Beispiel heute Morgen:
+    05:05 SOL LONG Signal
+    05:05 BTC fällt bereits → Warnung wäre raus
+    05:15 SOL SL gerissen
+    ════════════════════════════════════════════
+    """
+    global last_btc_warning
+    if not active_trades: return False
+
+    btc5m = get_btc_candles("5m", 5)
+    if btc5m is None or len(btc5m) < 3: return False
+
+    last  = btc5m.iloc[-1]
+    prev  = btc5m.iloc[-2]
+    move  = (last["close"] - prev["close"]) / prev["close"] * 100
+    btc_p = round(last["close"], 0)
+
+    now = time.time()
+    if now - last_btc_warning < 300:  # max 1 Warnung alle 5 Min
+        return False
+
+    for t in active_trades:
+        d = t["direction"]
+        triggered = (d == "LONG" and move <= -0.5) or (d == "SHORT" and move >= 0.5)
+        if triggered:
+            arrow   = "📈 LONG" if d == "LONG" else "📉 SHORT"
+            btc_dir = "fällt" if move < 0 else "steigt"
+            msg = (
+                "——————————————————\n"
+                f"⚡ <b>BTC EXIT-WARNUNG!</b>\n"
+                f"Offener {arrow} auf SOL\n"
+                "——————————————————\n"
+                f"📉 BTC {btc_dir}: <b>{move:+.2f}%</b> in 5 Min\n"
+                f"   BTC Preis: ${btc_p:,.0f}\n"
+                "——————————————————\n"
+                f"SOL Entry: ${t['entry']} | SL: ${t['sl']}\n"
+                "——————————————————\n"
+                "⚡ <b>SOL folgt BTC meist in 1-5 Min!</b>\n"
+                "🎯 Du entscheidest: Halten oder früh raus?"
+            )
+            sent = send_telegram(msg)
+            if sent:
+                last_btc_warning = now
+                print(f"[BTC WARNUNG] {d} Trade | BTC {move:+.2f}%")
+            return sent
+    return False
+
 # ─── INDIKATOREN ───────────────────────────────────────────
 
 def calc_ema(series, period):
@@ -584,27 +657,28 @@ def main():
     print("   SOL A+++ Scanner V14.1 – Smart Money Edition")
     print()
     print("   NEUE HARD FILTER (Backtest: PF 2.77 → 7.34):")
-    print("   📊 ADX >= 25  → kein Signal in Seitwärtsmärkten")
-    print("   🕯️  Mindest. 2 konsekutive Kerzen → echtes Momentum")
-    print()
-    print("   SIGNAL-TYPEN:")
-    print("   💥 Breakout  (V14, bewährt)")
-    print("   🌱 Spring    (V15 Wyckoff, präziser Entry)")
+    print("   SOL A+++ Scanner V14.2 – Smart Money + BTC Exit")
+    print("   📊 ADX Session-Filter (London>=25 / Asia>=30)")
+    print("   ⚡ BTC 5m Exit-Warnung bei offenem Trade")
+    print("   💥 Breakout + 🌱 Spring Signale")
     print("=" * 62)
 
     if active_trades:
         print(f"♻️ {len(active_trades)} Trade(s) wiederhergestellt!")
-        send_telegram(f"♻️ <b>V14.1 Restart – {len(active_trades)} Trade(s) wiederhergestellt!</b>")
+        send_telegram(f"♻️ <b>V14.2 Restart – {len(active_trades)} Trade(s) wiederhergestellt!</b>")
     else:
         send_telegram(
-            "🚀 <b>SOL Scanner V14.1 – Smart Money Edition!</b>\n\n"
-            "🆕 <b>Update: Session-ADX Filter</b>\n"
-            "📊 London/NY:    ADX >= 25\n"
-            "📊 Asia/Evening: ADX >= 30 ← NEU!\n"
-            "   Asia hat dünnes Volumen → mehr Fakeouts\n\n"
-            "🔀 <b>Zwei Signal-Typen:</b>\n"
-            "💥 Breakout – klassisch, bewährt\n"
-            "🌱 Spring   – Wyckoff Fakeout, präziser Entry\n\n"
+            "🚀 <b>SOL Scanner V14.2 – Smart Money + BTC!</b>\n\n"
+            "🆕 <b>NEU in V14.2:</b>\n"
+            "⚡ BTC 5m Exit-Warnung!\n"
+            "   BTC läuft SOL um 1-5 Min voraus\n"
+            "   Wenn BTC dreht → sofort Telegram\n"
+            "   Du entscheidest früher ob du rausgehst\n\n"
+            "📊 <b>Filter:</b>\n"
+            "London/NY:    ADX >= 25\n"
+            "Asia/Evening: ADX >= 30\n\n"
+            "🔀 <b>Signale:</b>\n"
+            "💥 Breakout | 🌱 Spring\n\n"
             "Warte auf Setup... 👀"
         )
 
@@ -612,14 +686,20 @@ def main():
     time.sleep(180)
     print("Bereit!")
 
-    last_scan = 0; last_check = 0
+    last_scan = 0; last_check = 0; last_btc_check = 0
 
     while True:
         now = time.time()
 
+        # Trade Tracking alle 30 Sek
         if now - last_check >= 30:
             last_check = now
             check_active_trades()
+
+        # BTC 5m Exit-Warnung alle 60 Sek (nur wenn Trade offen)
+        if now - last_btc_check >= 60 and active_trades:
+            last_btc_check = now
+            check_btc_exit_warning(active_trades)
 
         if now - last_scan >= SCAN_INTERVAL:
             last_scan = now
