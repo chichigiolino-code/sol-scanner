@@ -86,7 +86,7 @@ def get_price():
     except: return 0.0
 
 def get_btc_candles(bar, limit=30):
-    """BTC Daten für 5m Exit-Warnung"""
+    """BTC Daten für 5m Exit-Warnung und 1m Entry-Timing"""
     try:
         r = requests.get("https://www.okx.com/api/v5/market/candles",
             params={"instId": "BTC-USDT", "bar": bar, "limit": limit}, timeout=10)
@@ -97,6 +97,67 @@ def get_btc_candles(bar, limit=30):
         df["ts"] = pd.to_numeric(df["ts"])
         return df.iloc[::-1].reset_index(drop=True)
     except: return None
+
+
+def get_btc1m_entry_timing(direction):
+    """
+    ════════════════════════════════════════════
+    BTC 1m Entry-Timing
+    ════════════════════════════════════════════
+    Analysiert BTC 1m Kerzen um den OPTIMALEN
+    Entry-Zeitpunkt innerhalb der Signal-Zone
+    zu finden.
+
+    LONG:
+      BTC 1m grüne Kerze + Vol steigt → JETZT ✅
+      BTC 1m rote Kerze               → warten ⏳
+      BTC 1m 2x rot                   → vorsicht ⚠️
+
+    SHORT:
+      Spiegelverkehrt
+
+    Gibt einen Hinweis-Text für den Alert zurück.
+    ════════════════════════════════════════════
+    """
+    try:
+        btc1m = get_btc_candles("1m", 5)
+        if btc1m is None or len(btc1m) < 3:
+            return "⚡ BTC 1m: keine Daten – Entry nach eigenem Urteil"
+
+        last  = btc1m.iloc[-1]
+        prev  = btc1m.iloc[-2]
+        prev2 = btc1m.iloc[-3]
+
+        is_bull_last  = last["close"] > last["open"]
+        is_bull_prev  = prev["close"] > prev["open"]
+        is_bull_prev2 = prev2["close"] > prev2["open"]
+
+        vol_avg  = btc1m["vol"].mean()
+        vol_last = last["vol"]
+        vol_up   = vol_last > vol_avg * 1.1
+
+        move_last = round((last["close"] - last["open"]) / last["open"] * 100, 2)
+
+        if direction == "LONG":
+            if is_bull_last and vol_up:
+                return f"⚡ BTC 1m: Grüne Kerze + Vol ↑ → <b>JETZT einsteigen!</b> ✅"
+            elif is_bull_last:
+                return f"⚡ BTC 1m: Grüne Kerze ({move_last:+.2f}%) → Entry ok ✅"
+            elif not is_bull_last and not is_bull_prev:
+                return f"⚡ BTC 1m: 2x rote Kerzen ⚠️ → Warte auf grüne Kerze!"
+            else:
+                return f"⚡ BTC 1m: Rote Kerze ({move_last:+.2f}%) → 1 Min warten ⏳"
+        else:  # SHORT
+            if not is_bull_last and vol_up:
+                return f"⚡ BTC 1m: Rote Kerze + Vol ↑ → <b>JETZT einsteigen!</b> ✅"
+            elif not is_bull_last:
+                return f"⚡ BTC 1m: Rote Kerze ({move_last:+.2f}%) → Entry ok ✅"
+            elif is_bull_last and is_bull_prev:
+                return f"⚡ BTC 1m: 2x grüne Kerzen ⚠️ → Warte auf rote Kerze!"
+            else:
+                return f"⚡ BTC 1m: Grüne Kerze ({move_last:+.2f}%) → 1 Min warten ⏳"
+    except:
+        return "⚡ BTC 1m: Timing nicht verfügbar"
 
 # NEU V14.2: BTC 5m Exit-Warnung
 last_btc_warning = 0   # damit wir nicht jede Sekunde warnen
@@ -600,7 +661,8 @@ def analyze():
         "result": result, "logs": logs,
         "adx": adx_val, "adx_sig": adx_sig,
         "sig_4h": sig_4h, "sig_1h": sig_1h,
-        "trend_4h": trend_4h
+        "trend_4h": trend_4h,
+        "btc1m_timing": get_btc1m_entry_timing(direction)
     }
 
 # ─── FORMAT ALERT ──────────────────────────────────────────
@@ -620,11 +682,12 @@ def format_alert(data):
     lines = [
         "——————————————————",
         f"💰 <b>SOL/USDT</b>  {arrow}",
-        f"<b>{type_icon} V14.1</b>",
+        f"<b>{type_icon} V14.2</b>",
         f"📊 <b>Score: {data['score']}% ({data['grade']})</b>",
         f"🕐 {data['session']}",
         "——————————————————",
         f"📍 <b>Entry:</b> ${data['entry_low']} – ${data['entry_high']}",
+        data.get("btc1m_timing", ""),
         f"🔴 <b>SL:</b> ${s['sl']}  <i>(ATR: {s['atr']})</i>",
         "——————————————————",
         f"🎯 <b>T1:</b> ${s['t1']}  (RR 1:{s['rr1']}) → BE!",
