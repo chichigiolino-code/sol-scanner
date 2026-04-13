@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>SOL Monitor</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #080810;
+    color: #e0e0e0;
+    font-family: 'Courier New', monospace;
+    padding: 16px;
+    min-height: 100vh;
+  }
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 18px;
+  }
+  .title { font-size: 22px; font-weight: 700; color: #fff; }
+  .subtitle { font-size: 10px; color: #444; letter-spacing: 2px; }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #00e676; box-shadow: 0 0 8px #00e676;
+    display: inline-block; margin-right: 6px;
+    animation: blink 2s infinite;
+  }
+  .status-dot.error { background: #ff1744; box-shadow: 0 0 8px #ff1744; }
+  .update-time { font-size: 11px; color: #555; }
+  .card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+  .price-label { font-size: 10px; color: #444; margin-bottom: 4px; letter-spacing: 1px; }
+  .price-sol { font-size: 36px; font-weight: 700; color: #fff; letter-spacing: -1px; }
+  .price-btc { font-size: 26px; font-weight: 700; color: #f7931a; }
+  .range { font-size: 11px; color: #555; margin-top: 3px; }
+  .range .low { color: #ff6b6b; }
+  .range .high { color: #69db7c; }
+  .metrics {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 6px;
+    margin-top: 12px;
+  }
+  .metric {
+    background: rgba(255,255,255,0.03);
+    border-radius: 8px;
+    padding: 8px 4px;
+    text-align: center;
+  }
+  .metric-label { font-size: 9px; color: #444; margin-bottom: 3px; }
+  .metric-value { font-size: 13px; font-weight: 600; }
+  .signal-bar {
+    margin-top: 10px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+  }
+  .signal-bull { background: rgba(0,230,118,0.08); color: #00e676; border: 1px solid rgba(0,230,118,0.15); }
+  .signal-bear { background: rgba(255,23,68,0.08); color: #ff1744; border: 1px solid rgba(255,23,68,0.15); }
+  .btc-badge {
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .btc-row { display: flex; justify-content: space-between; align-items: center; }
+  .alerts-header {
+    font-size: 10px; color: #444; letter-spacing: 2px; margin-bottom: 10px;
+  }
+  .alert-count { color: #ffc107; margin-left: 4px; }
+  .alert-list { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
+  .alert-item {
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    color: #ccc;
+    border-left: 3px solid;
+  }
+  .alert-danger { background: rgba(255,23,68,0.12); border-color: #ff1744; }
+  .alert-warning { background: rgba(255,193,7,0.12); border-color: #ffc107; }
+  .alert-success { background: rgba(0,230,118,0.12); border-color: #00e676; }
+  .alert-time { color: #555; margin-right: 8px; }
+  .no-alerts { font-size: 12px; color: #333; }
+  .mini-chart { margin-top: 8px; }
+  .loading { text-align: center; padding: 60px; color: #444; font-size: 14px; }
+  .error-msg { text-align: center; padding: 30px; color: #ff1744; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+  .refresh-btn {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: #888;
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 11px;
+    cursor: pointer;
+    font-family: monospace;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="subtitle">OKX LIVE MONITOR</div>
+    <div class="title">SOL / BTC</div>
+  </div>
+  <div style="text-align:right">
+    <div>
+      <span class="status-dot" id="dot"></span>
+      <span class="update-time" id="update-time">–</span>
+    </div>
+    <div style="font-size:10px;color:#333;margin-top:2px">alle 10s</div>
+    <button class="refresh-btn" onclick="fetchAll()" style="margin-top:6px">⟳ Refresh</button>
+  </div>
+</div>
+
+<div id="config-note" style="font-size:10px;color:#555;text-align:center;margin-bottom:10px;min-height:14px"></div>
+<div id="loading" class="loading">⏳ Verbinde mit OKX...</div>
+<div id="content" style="display:none">
+
+  <!-- SOL Card -->
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+      <div>
+        <div class="price-label">SOL-USDT-SWAP</div>
+        <div class="price-sol" id="sol-price">–</div>
+        <div class="range">
+          24h Low <span class="low" id="sol-low">–</span>
+          · High <span class="high" id="sol-high">–</span>
+        </div>
+      </div>
+      <svg id="minichart" width="100" height="36"></svg>
+    </div>
+    <div class="metrics">
+      <div class="metric">
+        <div class="metric-label">RSI 5m</div>
+        <div class="metric-value" id="rsi">–</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">EMA9</div>
+        <div class="metric-value" id="ema9">–</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">EMA21</div>
+        <div class="metric-value" id="ema21">–</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Funding</div>
+        <div class="metric-value" id="funding">–</div>
+      </div>
+    </div>
+    <div class="signal-bar" id="signal-bar">–</div>
+  </div>
+
+  <!-- BTC Card -->
+  <div class="card">
+    <div class="btc-row">
+      <div>
+        <div class="price-label">BTC-USDT</div>
+        <div class="price-btc" id="btc-price">–</div>
+        <div class="range">24h Low <span class="low" id="btc-low">–</span></div>
+      </div>
+      <div class="btc-badge" id="btc-badge">–</div>
+    </div>
+    <div style="font-size:11px;color:#555;margin-top:8px">OI: <span id="oi">–</span> · Vol5m: <span id="vol5m">–</span></div>
+  </div>
+
+  <!-- Alerts -->
+  <div class="card">
+    <div class="alerts-header">ALERTS <span class="alert-count" id="alert-count"></span></div>
+    <div id="alert-list" class="no-alerts">Überwacht... noch keine Alerts.</div>
+  </div>
+
+</div>
+
+<script>
+let prevData = null;
+let CONFIG_URL = "https://raw.githubusercontent.com/chichigiolino-code/sol-scanner/main/config.json";
+let config = {
+  long_trigger: 82.30, long_trigger2: 83.50,
+  short_trigger: 81.70, btc_support: 71000, btc_resistance: 73000,
+  vol_spike_multiplier: 3
+};
+async function loadConfig() {
+  try {
+    const r = await fetch(CONFIG_URL + "?t=" + Date.now());
+    config = await r.json();
+    document.getElementById("config-note").textContent = "📋 " + (config.note || "Config geladen");
+  } catch(e) { console.log("Config load failed, using defaults"); }
+}
+setInterval(loadConfig, 60000);
+loadConfig();
+let alerts = [];
+let alertId = 0;
+
+function ema(closes, period) {
+  const k = 2 / (period + 1);
+  let e = closes[0];
+  for (let i = 1; i < closes.length; i++) e = closes[i] * k + e * (1 - k);
+  return e;
+}
+
+function rsi(closes, period = 14) {
+  if (closes.length < period + 1) return null;
+  let g = 0, l = 0;
+  for (let i = 1; i <= period; i++) {
+    const d = closes[i] - closes[i-1];
+    if (d > 0) g += d; else l -= d;
+  }
+  let ag = g/period, al = l/period;
+  for (let i = period+1; i < closes.length; i++) {
+    const d = closes[i] - closes[i-1];
+    ag = (ag*(period-1) + Math.max(d,0)) / period;
+    al = (al*(period-1) + Math.max(-d,0)) / period;
+  }
+  return al === 0 ? 100 : 100 - 100/(1 + ag/al);
+}
+
+function drawChart(closes) {
+  const svg = document.getElementById('minichart');
+  const w = 100, h = 36;
+  const min = Math.min(...closes), max = Math.max(...closes);
+  const range = max - min || 1;
+  const pts = closes.map((c, i) => {
+    const x = (i / (closes.length - 1)) * w;
+    const y = h - ((c - min) / range) * h;
+    return `${x},${y}`;
+  }).join(' ');
+  const trend = closes[closes.length-1] >= closes[0];
+  svg.innerHTML = `<polyline points="${pts}" fill="none" stroke="${trend ? '#00e676' : '#ff1744'}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+}
+
+function addAlert(msg, type) {
+  const now = new Date().toLocaleTimeString('de-DE');
+  alerts.unshift({ msg, type, time: now, id: ++alertId });
+  if (alerts.length > 30) alerts.pop();
+  renderAlerts();
+}
+
+function renderAlerts() {
+  const el = document.getElementById('alert-list');
+  const count = document.getElementById('alert-count');
+  if (alerts.length === 0) {
+    el.className = 'no-alerts';
+    el.innerHTML = 'Überwacht... noch keine Alerts.';
+    count.textContent = '';
+    return;
+  }
+  count.textContent = `(${alerts.length})`;
+  el.className = 'alert-list';
+  el.innerHTML = alerts.slice(0, 15).map(a => `
+    <div class="alert-item alert-${a.type}">
+      <span class="alert-time">${a.time}</span>${a.msg}
+    </div>
+  `).join('');
+}
+
+async function fetchAll() {
+  try {
+    const [solRes, btcRes, fundRes, oiRes, c5mRes] = await Promise.all([
+      fetch('https://www.okx.com/api/v5/market/ticker?instId=SOL-USDT-SWAP'),
+      fetch('https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT'),
+      fetch('https://www.okx.com/api/v5/public/funding-rate?instId=SOL-USDT-SWAP'),
+      fetch('https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId=SOL-USDT-SWAP'),
+      fetch('https://www.okx.com/api/v5/market/candles?instId=SOL-USDT&bar=5m&limit=30'),
+    ]);
+
+    const solD = (await solRes.json()).data[0];
+    const btcD = (await btcRes.json()).data[0];
+    const fundD = (await fundRes.json()).data[0];
+    const oiD = (await oiRes.json()).data[0];
+    const c5m = (await c5mRes.json()).data.reverse();
+
+    const solPrice = parseFloat(solD.last);
+    const btcPrice = parseFloat(btcD.last);
+    const fundingRate = parseFloat(fundD.fundingRate) * 100;
+    const oiVal = parseFloat(oiD.oi);
+    const closes = c5m.map(c => parseFloat(c[4]));
+    const vols = c5m.map(c => parseFloat(c[5]));
+    const rsiVal = rsi(closes);
+    const e9 = ema(closes, 9);
+    const e21 = ema(closes, 21);
+    const vol5m = vols[vols.length - 1];
+    const avgVol = vols.slice(-8).reduce((a,b) => a+b, 0) / 8;
+    const sol24h_high = parseFloat(solD.high24h);
+    const sol24h_low = parseFloat(solD.low24h);
+    const btc24h_low = parseFloat(btcD.low24h);
+
+    // Update DOM
+    document.getElementById('sol-price').textContent = `$${solPrice.toFixed(2)}`;
+    document.getElementById('sol-low').textContent = `$${sol24h_low.toFixed(2)}`;
+    document.getElementById('sol-high').textContent = `$${sol24h_high.toFixed(2)}`;
+    document.getElementById('btc-price').textContent = `$${btcPrice.toLocaleString('de-DE')}`;
+    document.getElementById('btc-low').textContent = `$${btc24h_low.toLocaleString()}`;
+    document.getElementById('oi').textContent = `${(oiVal/1000).toFixed(0)}K`;
+    document.getElementById('vol5m').textContent = `${vol5m.toFixed(0)}${vol5m > avgVol*2 ? ' 🔥' : ''}`;
+
+    // RSI
+    const rsiEl = document.getElementById('rsi');
+    rsiEl.textContent = rsiVal ? rsiVal.toFixed(1) : '–';
+    rsiEl.style.color = !rsiVal ? '#888' : rsiVal < 30 ? '#00e676' : rsiVal > 70 ? '#ff1744' : '#ffc107';
+
+    // EMA9
+    const e9El = document.getElementById('ema9');
+    e9El.textContent = e9.toFixed(2);
+    e9El.style.color = solPrice > e9 ? '#00e676' : '#ff1744';
+
+    // EMA21
+    const e21El = document.getElementById('ema21');
+    e21El.textContent = e21.toFixed(2);
+    e21El.style.color = solPrice > e21 ? '#00e676' : '#ff1744';
+
+    // Funding
+    const fundEl = document.getElementById('funding');
+    fundEl.textContent = `${fundingRate.toFixed(3)}%`;
+    fundEl.style.color = fundingRate < 0 ? '#00e676' : fundingRate > 0.02 ? '#ff1744' : '#e0e0e0';
+
+    // Signal bar
+    const sigBar = document.getElementById('signal-bar');
+    if (e9 > e21) {
+      sigBar.className = 'signal-bar signal-bull';
+      sigBar.textContent = `▲ EMA Bullish · OI: ${(oiVal/1000).toFixed(0)}K`;
+    } else {
+      sigBar.className = 'signal-bar signal-bear';
+      sigBar.textContent = `▼ EMA Bearish · OI: ${(oiVal/1000).toFixed(0)}K`;
+    }
+
+    // BTC badge
+    const badge = document.getElementById('btc-badge');
+    if (btcPrice > 73000) {
+      badge.style.cssText = 'background:rgba(0,230,118,0.1);color:#00e676;border:1px solid rgba(0,230,118,0.2);padding:5px 12px;border-radius:20px;font-size:11px;font-weight:600';
+      badge.textContent = 'STARK';
+    } else if (btcPrice < 71000) {
+      badge.style.cssText = 'background:rgba(255,23,68,0.1);color:#ff1744;border:1px solid rgba(255,23,68,0.2);padding:5px 12px;border-radius:20px;font-size:11px;font-weight:600';
+      badge.textContent = 'SCHWACH';
+    } else {
+      badge.style.cssText = 'background:rgba(255,193,7,0.1);color:#ffc107;border:1px solid rgba(255,193,7,0.2);padding:5px 12px;border-radius:20px;font-size:11px;font-weight:600';
+      badge.textContent = 'NEUTRAL';
+    }
+
+    // Chart
+    drawChart(closes.slice(-15));
+
+    // ALERTS
+    if (prevData) {
+      const p = prevData;
+      if (solPrice < config.short_trigger && p.solPrice >= config.short_trigger) addAlert('🔴 SOL unter $82.00!', 'danger');
+      if (solPrice < (config.short_trigger - 1) && p.solPrice >= (config.short_trigger - 1)) addAlert('🚨 SOL unter $81.00!', 'danger');
+      if (solPrice < 80.0 && p.solPrice >= 80.0) addAlert('🚨🚨 SOL unter $80.00!!!', 'danger');
+      if (solPrice > config.long_trigger2 && p.solPrice <= config.long_trigger2) addAlert('🟢 SOL über $83.50!', 'success');
+      if (solPrice > config.long_trigger && p.solPrice <= config.long_trigger) addAlert('🟢 SOL über $84.00!', 'success');
+      if (solPrice > 85.0 && p.solPrice <= 85.0) addAlert('🟢 SOL über $85.00 – Momentum!', 'success');
+      if (btcPrice < config.btc_support && p.btcPrice >= config.btc_support) addAlert('🔴 BTC unter $71.000!', 'danger');
+      if (btcPrice < 70000 && p.btcPrice >= 70000) addAlert('🚨 BTC unter $70.000!', 'danger');
+      if (btcPrice > 72000 && p.btcPrice <= 72000) addAlert('🟢 BTC über $72.000!', 'success');
+      if (btcPrice > config.btc_resistance && p.btcPrice <= config.btc_resistance) addAlert('🟢 BTC über $73.000!', 'success');
+      if (rsiVal && rsiVal < 25 && p.rsiVal >= 25) addAlert(`⚡ RSI überverkauft: ${rsiVal.toFixed(1)}`, 'warning');
+      if (rsiVal && rsiVal > 75 && p.rsiVal <= 75) addAlert(`⚠️ RSI überkauft: ${rsiVal.toFixed(1)}`, 'warning');
+      if (e9 > e21 && p.e9 <= p.e21) addAlert('🟢 EMA9 über EMA21 – Bullish Cross!', 'success');
+      if (e9 < e21 && p.e9 >= p.e21) addAlert('🔴 EMA9 unter EMA21 – Bearish Cross!', 'danger');
+      if (vol5m > avgVol * 3) addAlert(`📊 Volume Spike! ${vol5m.toFixed(0)} SOL (${(vol5m/avgVol).toFixed(1)}x)`, 'warning');
+      if (fundingRate < -0.03 && p.fundingRate >= -0.03) addAlert(`💰 Funding negativ: ${fundingRate.toFixed(4)}%`, 'warning');
+      if (oiVal < p.oiVal * 0.98) addAlert(`📉 OI fällt: ${((oiVal/p.oiVal-1)*100).toFixed(1)}%`, 'warning');
+    }
+
+    prevData = { solPrice, btcPrice, fundingRate, oiVal, rsiVal, e9, e21 };
+
+    // Status
+    document.getElementById('dot').className = 'status-dot';
+    document.getElementById('update-time').textContent = new Date().toLocaleTimeString('de-DE');
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('content').style.display = 'block';
+
+  } catch(e) {
+    document.getElementById('dot').className = 'status-dot error';
+    document.getElementById('update-time').textContent = 'Fehler';
+    console.error(e);
+  }
+}
+
+fetchAll();
+setInterval(fetchAll, 10000);
+</script>
+</body>
+</html>
