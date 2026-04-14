@@ -191,7 +191,12 @@ let config = {
 async function loadConfig() {
   try {
     const r = await fetch(CONFIG_URL + "?t=" + Date.now());
-    config = await r.json();
+    const newConfig = await r.json();
+    // Fire test alert if present and new
+    if (newConfig.test_alert && newConfig.test_alert !== config.test_alert) {
+      addAlert("🔔 TEST: " + newConfig.test_alert, "warning");
+    }
+    config = newConfig;
     document.getElementById("config-note").textContent = "📋 " + (config.note || "Config geladen");
   } catch(e) { console.log("Config load failed, using defaults"); }
 }
