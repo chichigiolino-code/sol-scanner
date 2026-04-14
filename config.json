@@ -1,12 +1,12 @@
 {
-  "long_trigger": 87.5,
-  "long_trigger2": 89.0,
-  "short_trigger": 86.0,
-  "pullback_entry": 86.0,
-  "btc_support": 74500,
-  "btc_resistance": 75500,
+  "long_trigger": 86.5,
+  "long_trigger2": 87.64,
+  "short_trigger": 84.5,
+  "pullback_entry": 85.1,
+  "btc_support": 74000,
+  "btc_resistance": 76000,
   "vol_spike_multiplier": 3,
   "test_alert": "",
-  "note": "14 Apr 15:56 UTC \u2013 RSI \u00fcberkauft 76.9 | Kein Entry jetzt | Pullback-Entry $86.00-86.50 | Breakout-Long \u00fcber $87.50 | Stop $85.80",
+  "note": "14 Apr 19:42 UTC \u2013 Pullback vom $87.64 High | RSI 37 Bounce m\u00f6glich | Long $85.10 Stop $84.50 T1 $86.50 T2 $87.64",
   "updated_by": "Claude"
 }
