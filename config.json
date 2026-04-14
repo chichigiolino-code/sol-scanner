@@ -1,12 +1,12 @@
 {
-  "long_trigger": 86.81,
-  "long_trigger2": 88.0,
-  "short_trigger": 85.4,
-  "btc_support": 74000,
-  "btc_resistance": 75000,
+  "long_trigger": 87.5,
+  "long_trigger2": 89.0,
+  "short_trigger": 86.0,
+  "pullback_entry": 86.0,
+  "btc_support": 74500,
+  "btc_resistance": 75500,
   "vol_spike_multiplier": 3,
-  "pullback_entry": 85.8,
-  "test_alert": "Monitor funktioniert! \u2705 SOL $86 | BTC $74.8k | 14 Apr 10:35 UTC",
-  "note": "14 Apr \u2013 Bullish Breakout | T1 $86.81 | T2 $88 | Stop $85.40",
+  "test_alert": "",
+  "note": "14 Apr 15:56 UTC \u2013 RSI \u00fcberkauft 76.9 | Kein Entry jetzt | Pullback-Entry $86.00-86.50 | Breakout-Long \u00fcber $87.50 | Stop $85.80",
   "updated_by": "Claude"
 }
