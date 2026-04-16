@@ -1,12 +1,12 @@
 {
-  "long_trigger": 85.83,
-  "long_trigger2": 87.0,
-  "short_trigger": 84.5,
-  "pullback_entry": 85.1,
-  "btc_support": 74500,
+  "long_trigger": 87.1,
+  "long_trigger2": 88.0,
+  "short_trigger": 86.0,
+  "pullback_entry": 85.8,
+  "btc_support": 74200,
   "btc_resistance": 75500,
   "vol_spike_multiplier": 3,
   "test_alert": "",
-  "note": "16 Apr 07:57 UTC \u2013 BTC $75k | SOL Kompression $85.33-85.83 | Breakout \u00fcber $85.83 \u2192 T1 $87 | Stop $84.50",
+  "note": "16 Apr 18:25 UTC \u2013 T1 $85.83 erreicht \u2705 | N\u00e4chstes Ziel $87.10 Breakout \u2192 $88 | Support $86.00 | Stop $85.30",
   "updated_by": "Claude"
 }
