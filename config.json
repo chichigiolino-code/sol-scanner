@@ -1,12 +1,12 @@
 {
-  "long_trigger": 88.5,
-  "long_trigger2": 90.0,
-  "short_trigger": 87.0,
-  "pullback_entry": 87.5,
-  "btc_support": 74000,
-  "btc_resistance": 75000,
+  "long_trigger": 86.2,
+  "long_trigger2": 87.5,
+  "short_trigger": 84.5,
+  "pullback_entry": 84.8,
+  "btc_support": 74500,
+  "btc_resistance": 75700,
   "vol_spike_multiplier": 3,
   "test_alert": "",
-  "note": "17 Apr 06:04 UTC \u2013 Konsolidierung nach $90.44 High | Long \u00fcber $88.50 | Stop $87.00 | BTC muss $75k zur\u00fcck",
+  "note": "20 Apr 11:54 UTC \u2013 OI f\u00e4llt stark! Kein Trade | Long erst \u00fcber $86.20 + BTC $75.7k | Stop $84.50",
   "updated_by": "Claude"
 }
