@@ -85,6 +85,79 @@ def get_price():
         return float(r.json().get("data",[{}])[0].get("last", 0))
     except: return 0.0
 
+def get_btc_price():
+    try:
+        r = requests.get("https://www.okx.com/api/v5/market/ticker",
+            params={"instId": "BTC-USDT"}, timeout=10)
+        return float(r.json().get("data",[{}])[0].get("last", 0))
+    except: return 0.0
+
+# ─── PREIS-ALARME (aus config.json) ────────────────────────
+ALERTS_STATE_FILE = "/tmp/bot_alerts_triggered.json"
+
+def load_price_alerts():
+    """Liest price_alerts aus config.json. Format:
+    [{"symbol":"SOL","condition":"below","price":78.0,"note":"..."}]"""
+    try:
+        with open("config.json") as f:
+            return json.load(f).get("price_alerts", [])
+    except Exception:
+        return []
+
+def load_triggered_alerts():
+    try:
+        with open(ALERTS_STATE_FILE) as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+def save_triggered_alerts(t):
+    try:
+        with open(ALERTS_STATE_FILE, "w") as f:
+            json.dump(sorted(t), f)
+    except Exception:
+        pass
+
+def check_price_alerts():
+    """Prüft Preis-Alarme, feuert jeden Alarm genau einmal per Telegram."""
+    alerts = load_price_alerts()
+    if not alerts:
+        return
+    triggered = load_triggered_alerts()
+    prices = {}
+    fired = False
+    for a in alerts:
+        sym  = str(a.get("symbol", "SOL")).upper()
+        cond = str(a.get("condition", "below")).lower()
+        try:
+            lvl = float(a.get("price", 0))
+        except Exception:
+            continue
+        key = f"{sym}_{cond}_{lvl}"
+        if key in triggered or lvl <= 0:
+            continue
+        if sym not in prices:
+            prices[sym] = get_btc_price() if sym == "BTC" else get_price()
+        px = prices[sym]
+        if not px:
+            continue
+        hit = (cond == "below" and px <= lvl) or (cond == "above" and px >= lvl)
+        if hit:
+            arrow = "🔻" if cond == "below" else "🔺"
+            richtung = "unter" if cond == "below" else "über"
+            note = a.get("note", "")
+            msg = (f"{arrow} <b>PREIS-ALARM {sym}</b>\n"
+                   f"{sym} ist {richtung} <b>{lvl}</b>\n"
+                   f"Aktuell: {px}\n")
+            if note:
+                msg += f"\n💡 {note}"
+            send_telegram(msg)
+            triggered.add(key)
+            fired = True
+            print(f"[ALARM] {key} @ {px}")
+    if fired:
+        save_triggered_alerts(triggered)
+
 def get_btc_candles(bar, limit=30):
     """BTC Daten für 5m Exit-Warnung und 1m Entry-Timing"""
     try:
@@ -749,10 +822,15 @@ def main():
     time.sleep(180)
     print("Bereit!")
 
-    last_scan = 0; last_check = 0; last_btc_check = 0
+    last_scan = 0; last_check = 0; last_btc_check = 0; last_alerts_check = 0
 
     while True:
         now = time.time()
+
+        # Preis-Alarme alle 30 Sek (aus config.json)
+        if now - last_alerts_check >= 30:
+            last_alerts_check = now
+            check_price_alerts()
 
         # Trade Tracking alle 30 Sek
         if now - last_check >= 30:

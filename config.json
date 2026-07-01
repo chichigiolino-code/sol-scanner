@@ -1,12 +1,17 @@
 {
-  "long_trigger": 86.2,
-  "long_trigger2": 87.5,
-  "short_trigger": 84.5,
-  "pullback_entry": 84.8,
-  "btc_support": 74500,
-  "btc_resistance": 75700,
+  "long_trigger": 78.7,
+  "long_trigger2": 79.5,
+  "short_trigger": 76.5,
+  "pullback_entry": 78.0,
+  "btc_support": 60000,
+  "btc_resistance": 60850,
   "vol_spike_multiplier": 3,
+  "price_alerts": [
+    {"symbol": "SOL", "condition": "below", "price": 78.0, "note": "Retest der Ausbruchszone 77.8-78.0 – Long-Setup prüfen: hält der Support? BTC über 60.5k? Dann Check bei Claude."},
+    {"symbol": "SOL", "condition": "above", "price": 78.7, "note": "Neues Hoch gebrochen – Trend läuft weiter ohne Retest. Nicht chasen, auf nächsten Pullback warten."},
+    {"symbol": "BTC", "condition": "below", "price": 60000, "note": "BTC verliert 60k – Long-These geschwächt, Vorsicht."}
+  ],
   "test_alert": "",
-  "note": "20 Apr 11:54 UTC \u2013 OI f\u00e4llt stark! Kein Trade | Long erst \u00fcber $86.20 + BTC $75.7k | Stop $84.50",
+  "note": "01 Jul 22:00 UTC - Preis-Alarme aktiv. SOL Retest-Zone 77.8-78.0 beobachten, BTC 60k = Invalidierung.",
   "updated_by": "Claude"
 }
